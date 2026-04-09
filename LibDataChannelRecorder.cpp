@@ -319,9 +319,7 @@ void LibDataChannelRecorder::RecordingThread() {
     // ── 0. Agora signaling ────────────────────────────────────────────────────
     // Generate per-session IDs matching what Agora Web SDK creates.
     const std::string sid         = MakeHexSid();    // 32-char random hex
-    const std::string sessionUuid = m_streamInfo.sessionId.empty()
-                                      ? MakeUuid()
-                                      : MakeUuid();  // always a fresh UUID
+    const std::string sessionUuid = MakeUuid(); // fresh UUID per recording session
 
     TLSClient http;
 
