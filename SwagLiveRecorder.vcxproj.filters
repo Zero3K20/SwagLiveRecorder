@@ -3,18 +3,24 @@
   <ItemGroup>
     <Filter Include="Source Files">
       <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
-      <Extensions>cpp;c;cxx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+      <Extensions>cpp;c;cxx</Extensions>
     </Filter>
     <Filter Include="Header Files">
       <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
-      <Extensions>h;hh;hpp;hxx;hm;inl;inc;ipp;xsd</Extensions>
+      <Extensions>h;hh;hpp;hxx</Extensions>
     </Filter>
-    <Filter Include="Source Files\tlsclient">
-      <UniqueIdentifier>{D3C7F0A1-B2E3-4D5A-9F8C-1E2B3C4D5E6F}</UniqueIdentifier>
+    <Filter Include="TLS Client">
+      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="SwagLiveRecorder.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="MainWindow.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="WebRTCRecorder.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="SwagLiveAPI.cpp">
@@ -27,10 +33,16 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="tlsclient\tlsclient.cpp">
-      <Filter>Source Files\tlsclient</Filter>
+      <Filter>TLS Client</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="MainWindow.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="WebRTCRecorder.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="SwagLiveAPI.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -47,10 +59,13 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="tlsclient\tlsclient.h">
-      <Filter>Source Files\tlsclient</Filter>
+      <Filter>TLS Client</Filter>
     </ClInclude>
     <ClInclude Include="tlsclient\lock.h">
-      <Filter>Source Files\tlsclient</Filter>
+      <Filter>TLS Client</Filter>
     </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="packages.config" />
   </ItemGroup>
 </Project>

@@ -34,7 +34,14 @@ recordings/
 models.txt
 *.ts
 *.mp4
+*.webm
 *.log
+
+# WebView2 user data (created at runtime, one folder per model)
+webview2_data/
+
+# NuGet packages (restored on build)
+packages/
 
 # Windows-specific
 Thumbs.db

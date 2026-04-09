@@ -1,31 +1,18 @@
 //=============================================================================
-// SwagLiveRecorder - Automatic live-stream recorder for swag.live
+// SwagLiveRecorder - Automatic WebRTC live-stream recorder for swag.live
 //
-// This console-mode application monitors a user-maintained watchlist of model
-// usernames.  Whenever a watched model starts a free-chat live stream the
-// program automatically begins recording the stream to disk via ffmpeg.
+// Architecture:
+//   - Win32 GUI (MainWindow) for the watchlist, recording status, and settings
+//   - Background monitor thread polls the swag.live API (SwagLiveAPI + TLSClient)
+//   - WebView2-embedded browser (WebRTCRecorder) records each stream using the
+//     browser's MediaRecorder API, writing chunks as .webm files to disk
+//     (same technique as the LivestreamRecorder userscript)
 //
 // Build requirements:
-//   - Visual Studio 2019 (toolset v142)
-//   - Windows SDK 10.0 or later
-//   - ffmpeg.exe in PATH (or configured via --ffmpeg option)
-//
-// Usage:
-//   SwagLiveRecorder.exe [options]
-//
-// Options:
-//   --list                    Print current watchlist
-//   --add <username>          Add model to watchlist
-//   --remove <username>       Remove model from watchlist
-//   --enable <username>       Enable auto-record for model
-//   --disable <username>      Disable auto-record for model
-//   --output <directory>      Set recording output directory (default: recordings)
-//   --ffmpeg <path>           Path to ffmpeg.exe
-//   --models <file>           Path to models watchlist file (default: models.txt)
-//   --interval <seconds>      Polling interval in seconds (default: 60)
-//   --token <auth_token>      swag.live authentication token (if required)
-//   --run                     Start monitoring loop (default if no other action)
-//
+//   - Visual Studio 2019 (toolset v142), Windows SDK 10.0
+//   - Microsoft.Web.WebView2 NuGet package (run: nuget restore)
+//   - WebView2 Runtime installed on the target machine (ships with Windows 11;
+//     auto-updated via Windows Update on Win10 1803+)
 //=============================================================================
 
 #ifndef UNICODE
@@ -38,316 +25,317 @@
 #include <winsock2.h>
 #include <windows.h>
 
-#include <iostream>
 #include <string>
 #include <vector>
-#include <algorithm>
-#include <chrono>
 #include <thread>
-#include <csignal>
-#include <cstdlib>
+#include <atomic>
+#include <chrono>
+#include <sstream>
+#include <algorithm>
+#include <cctype>
 
+#include "MainWindow.h"
 #include "ModelList.h"
 #include "SwagLiveAPI.h"
 #include "Recorder.h"
 #include "tlsclient/tlsclient.h"
 
-// -----------------------------------------------------------------------
-// Globals
-// -----------------------------------------------------------------------
+// ─── Forward declarations ─────────────────────────────────────────────────────
+static void MonitorThreadProc(MainWindow* wnd, std::atomic<bool>* stopFlag,
+                              ModelList* modelList, SwagLiveAPI* api,
+                              Recorder* recorder, int* pollInterval);
 
-static volatile bool g_shutdown = false;
+// ─── Application state ───────────────────────────────────────────────────────
 
-// -----------------------------------------------------------------------
-// Signal handler
-// -----------------------------------------------------------------------
+struct AppState {
+    ModelList    modelList;
+    SwagLiveAPI  api;
+    Recorder*    recorder  = nullptr;
+    MainWindow*  mainWnd   = nullptr;
+    std::thread  monThread;
+    std::atomic<bool> stopMonitor { false };
+    int          pollInterval = 60;
+    std::string  modelsFile   = "models.txt";
+    std::string  outputDir    = "recordings";
 
-static void HandleSignal(int sig) {
-    (void)sig;
-    g_shutdown = true;
-}
+    AppState() : modelList("models.txt") {}
+};
 
-// -----------------------------------------------------------------------
-// Helper: case-insensitive string comparison
-// -----------------------------------------------------------------------
+// ─── Helper ──────────────────────────────────────────────────────────────────
 
-static std::string ToLower(const std::string& s) {
-    std::string r = s;
-    std::transform(r.begin(), r.end(), r.begin(),
-        [](unsigned char c) { return (char)std::tolower(c); });
+static std::wstring Utf8ToWide(const std::string& s) {
+    if (s.empty()) return L"";
+    int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
+    if (n <= 0) return L"";
+    std::wstring r(n - 1, 0);
+    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, &r[0], n);
     return r;
 }
 
-// -----------------------------------------------------------------------
-// Monitoring loop
-// -----------------------------------------------------------------------
+// ─── Monitor thread ──────────────────────────────────────────────────────────
 
-static void RunMonitorLoop(ModelList& modelList,
-                           SwagLiveAPI& api,
-                           Recorder& recorder,
-                           int pollIntervalSec) {
-    std::cout << "\n[Monitor] Starting monitor loop (poll every "
-              << pollIntervalSec << "s). Press Ctrl+C to stop.\n\n";
+static void MonitorThreadProc(MainWindow* wnd,
+                               std::atomic<bool>* stopFlag,
+                               ModelList* modelList,
+                               SwagLiveAPI* api,
+                               Recorder* recorder,
+                               int* pollInterval) {
+    auto log = [&](const std::wstring& line) {
+        wnd->PostLogLine(line);
+    };
 
-    while (!g_shutdown) {
-        const auto& models = modelList.GetModels();
+    log(L"[Monitor] Started.");
+
+    while (!stopFlag->load()) {
+        const auto& models = modelList->GetModels();
         if (models.empty()) {
-            std::cout << "[Monitor] Watchlist is empty. "
-                         "Add models with --add <username>.\n";
+            log(L"[Monitor] Watchlist is empty - add models via 'Add Model'.");
         } else {
-            std::cout << "[Monitor] Checking " << models.size()
-                      << " model(s)...\n";
+            std::wstringstream ss;
+            ss << L"[Monitor] Checking " << models.size() << L" model(s)...";
+            log(ss.str());
 
             for (const auto& model : models) {
+                if (stopFlag->load()) break;
                 if (!model.enabled) continue;
-                if (g_shutdown) break;
 
                 StreamInfo info;
-                bool found = api.GetModelStatus(model.username, info);
+                bool found = api->GetModelStatus(model.username, info);
+
+                std::wstringstream ms;
+                ms << L"  " << Utf8ToWide(model.username) << L" - ";
 
                 if (!found) {
-                    std::cout << "  " << model.username
-                              << " - not found / offline\n";
+                    ms << L"offline/not found";
+                    wnd->PostLogLine(ms.str());
 
-                    // If we were recording and the model went offline, stop
-                    if (recorder.IsRecording(model.username)) {
-                        std::cout << "  [Recorder] Model went offline - "
-                                     "stopping recording.\n";
-                        recorder.StopRecording(model.username);
+                    // Stop any running recording for this model
+                    if (recorder->IsRecording(model.username)) {
+                        log(L"    [Recorder] Model offline - stopping recording.");
+                        // Must post to main thread to stop (WebView2 is main-thread only)
+                        SendMessage(wnd->GetHwnd(), WM_APP + 10,
+                            (WPARAM)new std::string(model.username), 0);
                     }
+                    // Update status in list
+                    SendMessage(wnd->GetHwnd(), WM_APP + 11,
+                        (WPARAM)new std::string(model.username),
+                        (LPARAM)new std::string("offline"));
                     continue;
                 }
 
-                std::cout << "  " << model.username
-                          << " - " << (info.isLive ? "LIVE" : "offline");
-
+                ms << (info.isLive ? L"LIVE" : L"offline");
                 if (info.isLive) {
-                    std::cout << ", chat: " << (info.chatMode.empty()
-                                                ? "unknown" : info.chatMode)
-                              << ", viewers: " << info.viewerCount;
+                    ms << L", chat=" << Utf8ToWide(info.chatMode.empty() ? "?" : info.chatMode)
+                       << L", viewers=" << info.viewerCount;
                 }
-                std::cout << "\n";
+                wnd->PostLogLine(ms.str());
 
-                if (info.isLive && info.isFreeChat) {
-                    if (!recorder.IsRecording(model.username)) {
-                        std::cout << "  [Recorder] Starting recording for "
-                                  << model.username << "...\n";
-                        recorder.StartRecording(info);
-                    }
-                } else {
-                    // Model is not in free chat (private, group, etc.) or offline
-                    if (recorder.IsRecording(model.username)) {
-                        std::cout << "  [Recorder] Stream is no longer in "
-                                     "free chat - stopping recording.\n";
-                        recorder.StopRecording(model.username);
-                    }
+                std::string displayStatus = info.isLive
+                    ? (info.isFreeChat ? "Live (Free)" : "Live (Private)")
+                    : "offline";
+
+                // Update status column on main thread
+                SendMessage(wnd->GetHwnd(), WM_APP + 11,
+                    (WPARAM)new std::string(model.username),
+                    (LPARAM)new std::string(displayStatus));
+
+                if (info.isLive && info.isFreeChat && !recorder->IsRecording(model.username)) {
+                    log(L"    [Recorder] Starting recording...");
+                    // Start must be called on main thread (WebView2 requirement)
+                    // We copy the StreamInfo onto the heap and post it
+                    SendMessage(wnd->GetHwnd(), WM_APP + 12,
+                        (WPARAM)new StreamInfo(info), 0);
+                } else if (recorder->IsRecording(model.username) &&
+                           (!info.isLive || !info.isFreeChat)) {
+                    log(L"    [Recorder] No longer in free chat - stopping.");
+                    SendMessage(wnd->GetHwnd(), WM_APP + 10,
+                        (WPARAM)new std::string(model.username), 0);
                 }
             }
         }
 
-        // Clean up sessions for recordings that have finished on their own
-        recorder.CleanupFinished();
-
-        // Display active recordings
-        auto active = recorder.GetActiveRecordings();
-        if (!active.empty()) {
-            std::cout << "[Monitor] Currently recording:";
-            for (const auto& name : active) {
-                std::cout << " " << name;
-            }
-            std::cout << "\n";
-        }
-
-        // Sleep for polling interval, waking every second to check shutdown
-        for (int s = 0; s < pollIntervalSec && !g_shutdown; ++s) {
+        // Sleep for pollInterval seconds, checking stopFlag every second
+        for (int s = 0; s < *pollInterval && !stopFlag->load(); ++s) {
             std::this_thread::sleep_for(std::chrono::seconds(1));
         }
     }
 
-    std::cout << "\n[Monitor] Shutdown requested - stopping all recordings.\n";
-    recorder.StopAll();
+    log(L"[Monitor] Stopped.");
 }
 
-// -----------------------------------------------------------------------
-// Entry point
-// -----------------------------------------------------------------------
+// ─── WinMain ─────────────────────────────────────────────────────────────────
 
-int main(int argc, char* argv[]) {
-    // Install signal handler for graceful shutdown
-    signal(SIGINT,  HandleSignal);
-    signal(SIGTERM, HandleSignal);
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow) {
+    // Initialise Winsock
+    WSADATA wsa;
+    WSAStartup(MAKEWORD(2, 2), &wsa);
 
-    // Initialise TLS/networking subsystem
-    TLSClient::InitializeGlobal();
+    // Initialise COM (required by WebView2 and SHBrowseForFolder)
+    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
 
-    // ----------------------------------------------------------------
-    // Parse command-line arguments
-    // ----------------------------------------------------------------
+    AppState app;
 
-    std::string modelsFile      = "models.txt";
-    std::string outputDir       = "recordings";
-    std::string ffmpegPath;
-    std::string authToken;
-    int pollIntervalSec         = 60;
-    bool runLoop                = false;
+    // ── Create GUI ────────────────────────────────────────────────────────────
+    MainWindow mainWnd;
+    app.mainWnd = &mainWnd;
 
-    // Actions requested by the user
-    bool doList                 = false;
-    bool doAdd                  = false;
-    bool doRemove               = false;
-    bool doEnable               = false;
-    bool doDisable              = false;
-    std::string actionUsername;
+    if (!mainWnd.Create(hInstance, nCmdShow)) {
+        MessageBoxW(nullptr, L"Failed to create main window.", L"SwagLiveRecorder", MB_ICONERROR);
+        return 1;
+    }
 
-    for (int i = 1; i < argc; ++i) {
-        std::string arg = argv[i];
+    // ── Create recorder (main thread, shares message loop) ───────────────────
+    RecorderConfig recCfg;
+    recCfg.outputDirectory = app.outputDir;
+    recCfg.appendTimestamp = true;
 
-        if (arg == "--list") {
-            doList = true;
-        } else if (arg == "--add" && i + 1 < argc) {
-            doAdd = true;
-            actionUsername = argv[++i];
-        } else if (arg == "--remove" && i + 1 < argc) {
-            doRemove = true;
-            actionUsername = argv[++i];
-        } else if (arg == "--enable" && i + 1 < argc) {
-            doEnable = true;
-            actionUsername = argv[++i];
-        } else if (arg == "--disable" && i + 1 < argc) {
-            doDisable = true;
-            actionUsername = argv[++i];
-        } else if (arg == "--output" && i + 1 < argc) {
-            outputDir = argv[++i];
-        } else if (arg == "--ffmpeg" && i + 1 < argc) {
-            ffmpegPath = argv[++i];
-        } else if (arg == "--models" && i + 1 < argc) {
-            modelsFile = argv[++i];
-        } else if (arg == "--interval" && i + 1 < argc) {
-            pollIntervalSec = std::atoi(argv[++i]);
-            if (pollIntervalSec < 5) pollIntervalSec = 5;
-        } else if (arg == "--token" && i + 1 < argc) {
-            authToken = argv[++i];
-        } else if (arg == "--run") {
-            runLoop = true;
-        } else if (arg == "--help" || arg == "-h") {
-            std::cout <<
-                "SwagLiveRecorder - Automatic recorder for swag.live live streams\n\n"
-                "Usage: SwagLiveRecorder.exe [options]\n\n"
-                "Options:\n"
-                "  --list               Print current watchlist\n"
-                "  --add <username>     Add model to watchlist\n"
-                "  --remove <username>  Remove model from watchlist\n"
-                "  --enable <username>  Enable auto-record for model\n"
-                "  --disable <username> Disable auto-record for model\n"
-                "  --output <dir>       Recording output directory (default: recordings)\n"
-                "  --ffmpeg <path>      Path to ffmpeg.exe\n"
-                "  --models <file>      Watchlist file path (default: models.txt)\n"
-                "  --interval <sec>     Poll interval in seconds (default: 60)\n"
-                "  --token <token>      swag.live auth token (if required)\n"
-                "  --run                Start the monitoring loop\n"
-                "  --help               Show this help message\n"
-                "\nExamples:\n"
-                "  SwagLiveRecorder.exe --add modelname\n"
-                "  SwagLiveRecorder.exe --list\n"
-                "  SwagLiveRecorder.exe --run --output D:\\recordings --interval 30\n";
-            return 0;
+    Recorder recorder(recCfg, mainWnd.GetHwnd());
+    app.recorder = &recorder;
+
+    // Recorder callbacks → update GUI
+    recorder.onStarted = [&](const std::string& u) {
+        mainWnd.UpdateRecordingStatus(u, "● Recording");
+        mainWnd.PostLogLine(L"[Recorder] Started: " + Utf8ToWide(u));
+    };
+    recorder.onStopped = [&](const std::string& u, size_t bytes) {
+        mainWnd.UpdateRecordingStatus(u, "Stopped", bytes);
+        std::wstringstream ss;
+        ss << L"[Recorder] Stopped: " << Utf8ToWide(u)
+           << L" (" << bytes / 1024 << L" KB)";
+        mainWnd.PostLogLine(ss.str());
+    };
+    recorder.onError = [&](const std::string& u, const std::string& err) {
+        mainWnd.UpdateRecordingStatus(u, "Error");
+        mainWnd.PostLogLine(L"[Recorder] Error for " + Utf8ToWide(u) + L": " + Utf8ToWide(err));
+    };
+    recorder.onProgress = [&](const std::string& u, size_t bytes) {
+        mainWnd.UpdateRecordingStatus(u, "● Recording", bytes);
+    };
+
+    // ── GUI callbacks ─────────────────────────────────────────────────────────
+    mainWnd.onAddModel = [&](const std::string& name) {
+        if (app.modelList.AddModel(name)) {
+            app.modelList.Save();
+            mainWnd.RefreshModelList(app.modelList);
+            mainWnd.PostLogLine(L"Added: " + Utf8ToWide(name));
         } else {
-            std::cerr << "Unknown option: " << arg
-                      << "\nRun with --help for usage information.\n";
-            return 1;
+            mainWnd.PostLogLine(L"'" + Utf8ToWide(name) + L"' already in list.");
         }
-    }
-
-    // Default: start the monitoring loop if no management action specified
-    if (!doList && !doAdd && !doRemove && !doEnable && !doDisable) {
-        runLoop = true;
-    }
-
-    // ----------------------------------------------------------------
-    // Load watchlist
-    // ----------------------------------------------------------------
-
-    ModelList modelList(modelsFile);
-
-    // ----------------------------------------------------------------
-    // Execute management actions
-    // ----------------------------------------------------------------
-
-    if (doList) {
-        std::cout << "Watchlist (" << modelsFile << "):\n";
-        modelList.Print();
-        return 0;
-    }
-
-    if (doAdd) {
-        if (modelList.AddModel(actionUsername)) {
-            modelList.Save();
-            std::cout << "Added '" << actionUsername << "' to watchlist.\n";
-        } else {
-            std::cout << "'" << actionUsername << "' is already in the watchlist.\n";
+    };
+    mainWnd.onRemoveModel = [&](const std::string& name) {
+        if (recorder.IsRecording(name)) recorder.StopRecording(name);
+        if (app.modelList.RemoveModel(name)) {
+            app.modelList.Save();
+            mainWnd.RefreshModelList(app.modelList);
+            mainWnd.PostLogLine(L"Removed: " + Utf8ToWide(name));
         }
-        return 0;
-    }
-
-    if (doRemove) {
-        if (modelList.RemoveModel(actionUsername)) {
-            modelList.Save();
-            std::cout << "Removed '" << actionUsername << "' from watchlist.\n";
-        } else {
-            std::cout << "'" << actionUsername << "' was not in the watchlist.\n";
+    };
+    mainWnd.onSetEnabled = [&](const std::string& name, bool en) {
+        app.modelList.SetEnabled(name, en);
+        app.modelList.Save();
+        mainWnd.RefreshModelList(app.modelList);
+    };
+    mainWnd.onSetOutputDir = [&](const std::string& dir) {
+        app.outputDir = dir;
+        recCfg.outputDirectory = dir;
+    };
+    mainWnd.onStartMonitor = [&]() {
+        auto settings = mainWnd.GetSettings();
+        app.pollInterval = settings.pollIntervalSec;
+        if (!settings.authToken.empty())
+            app.api.SetAuthToken(settings.authToken);
+        app.stopMonitor.store(false);
+        app.monThread = std::thread(MonitorThreadProc,
+            &mainWnd, &app.stopMonitor,
+            &app.modelList, &app.api,
+            &recorder, &app.pollInterval);
+        mainWnd.PostLogLine(L"[App] Monitor started (interval: " +
+            std::to_wstring(app.pollInterval) + L"s).");
+    };
+    mainWnd.onStopMonitor = [&]() {
+        app.stopMonitor.store(true);
+        // Join on a helper thread so the main message loop keeps running
+        // (WebView2 requires the main thread to keep pumping messages)
+        if (app.monThread.joinable()) {
+            std::thread joiner([&]() {
+                if (app.monThread.joinable()) app.monThread.join();
+            });
+            joiner.detach();
         }
-        return 0;
-    }
+        mainWnd.PostLogLine(L"[App] Monitor stop requested.");
+    };
 
-    if (doEnable) {
-        if (modelList.SetEnabled(actionUsername, true)) {
-            modelList.Save();
-            std::cout << "Enabled recording for '" << actionUsername << "'.\n";
-        } else {
-            std::cout << "'" << actionUsername << "' not found in watchlist.\n";
-        }
-        return 0;
-    }
+    // Populate model list from file
+    mainWnd.RefreshModelList(app.modelList);
 
-    if (doDisable) {
-        if (modelList.SetEnabled(actionUsername, false)) {
-            modelList.Save();
-            std::cout << "Disabled recording for '" << actionUsername << "'.\n";
-        } else {
-            std::cout << "'" << actionUsername << "' not found in watchlist.\n";
-        }
-        return 0;
-    }
+    // ── Sub-class the main window HWND to handle custom WM_APP messages
+    //    (main-thread operations posted from the monitor thread) ──────────────
+    static WNDPROC origProc = nullptr;
+    origProc = reinterpret_cast<WNDPROC>(
+        SetWindowLongPtrW(mainWnd.GetHwnd(), GWLP_WNDPROC,
+            reinterpret_cast<LONG_PTR>(
+                [](HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) -> LRESULT {
+                    static AppState* pApp = nullptr;
+                    static Recorder* pRec = nullptr;
+                    static MainWindow* pWnd = nullptr;
 
-    // ----------------------------------------------------------------
-    // Start monitoring loop
-    // ----------------------------------------------------------------
+                    // First call: store pointers via WM_CREATE can't work here since
+                    // we subclass after creation.  Use thread-local-like statics set
+                    // from the enclosing lambda capture – we use a trick via WM_USER.
+                    if (msg == WM_USER + 99) {
+                        pApp = reinterpret_cast<AppState*>(wp);
+                        pRec = reinterpret_cast<Recorder*>(lp);
+                        pWnd = pApp->mainWnd;
+                        return 0;
+                    }
+                    if (!pRec) {
+                        return CallWindowProcW(origProc, hwnd, msg, wp, lp);
+                    }
 
-    if (runLoop) {
-        std::cout << "SwagLiveRecorder - Automatic recorder for swag.live\n";
-        std::cout << "Watchlist file : " << modelsFile << "\n";
-        std::cout << "Output dir     : " << outputDir << "\n";
-        std::cout << "Poll interval  : " << pollIntervalSec << "s\n";
+                    // WM_APP+10: stop recording for username (heap string, we free it)
+                    if (msg == WM_APP + 10) {
+                        auto* name = reinterpret_cast<std::string*>(wp);
+                        if (name) { pRec->StopRecording(*name); delete name; }
+                        return 0;
+                    }
+                    // WM_APP+11: update status label (heap strings, we free them)
+                    if (msg == WM_APP + 11) {
+                        auto* name   = reinterpret_cast<std::string*>(wp);
+                        auto* status = reinterpret_cast<std::string*>(lp);
+                        if (name && status && pWnd)
+                            pWnd->UpdateRecordingStatus(*name, *status);
+                        delete name; delete status;
+                        return 0;
+                    }
+                    // WM_APP+12: start recording (heap StreamInfo, we free it)
+                    if (msg == WM_APP + 12) {
+                        auto* info = reinterpret_cast<StreamInfo*>(wp);
+                        if (info) { pRec->StartRecording(*info); delete info; }
+                        return 0;
+                    }
+                    return CallWindowProcW(origProc, hwnd, msg, wp, lp);
+                }
+            )
+        )
+    );
 
-        if (!authToken.empty()) {
-            std::cout << "Auth token     : [set]\n";
-        }
+    // Initialise the subclass statics
+    SendMessageW(mainWnd.GetHwnd(), WM_USER + 99,
+        reinterpret_cast<WPARAM>(&app),
+        reinterpret_cast<LPARAM>(&recorder));
 
-        SwagLiveAPI api;
-        if (!authToken.empty()) {
-            api.SetAuthToken(authToken);
-        }
+    // ── Message loop ─────────────────────────────────────────────────────────
+    int ret = mainWnd.MessageLoop();
 
-        RecorderConfig recConfig;
-        recConfig.outputDirectory  = outputDir;
-        recConfig.ffmpegPath       = ffmpegPath;
-        recConfig.appendTimestamp  = true;
+    // ── Cleanup ───────────────────────────────────────────────────────────────
+    app.stopMonitor.store(true);
+    // Wait for the monitor thread to finish (it sleeps in 1 s increments and
+    // re-checks stopFlag, so it will exit within one poll interval at most)
+    if (app.monThread.joinable()) app.monThread.join();
 
-        Recorder recorder(recConfig);
+    recorder.StopAll();
 
-        RunMonitorLoop(modelList, api, recorder, pollIntervalSec);
-    }
-
+    CoUninitialize();
     WSACleanup();
-    return 0;
+    return ret;
 }
