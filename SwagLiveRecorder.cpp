@@ -98,7 +98,7 @@ static void MonitorThreadProc(MainWindow* wnd,
                 if (!model.enabled) continue;
 
                 StreamInfo info;
-                bool found = api->GetModelStatus(model.username, info);
+                bool found = api->ResolveStream(model.username, info);
 
                 std::wstringstream ms;
                 ms << L"  " << Utf8ToWide(model.username) << L" - ";
@@ -119,29 +119,30 @@ static void MonitorThreadProc(MainWindow* wnd,
                     continue;
                 }
 
-                ms << (info.isLive ? L"LIVE" : L"offline");
-                if (info.isLive) {
-                    ms << L", chat=" << Utf8ToWide(info.chatMode.empty() ? "?" : info.chatMode)
-                       << L", viewers=" << info.viewerCount;
-                }
+                // preset "preview" = free chat (price == 0)
+                // preset "sd"      = paid chat  (price > 0)
+                bool isFreePreview = (info.preset == "preview" && info.price == 0);
+
+                ms << L"LIVE";
+                if (!info.title.empty())
+                    ms << L" [" << Utf8ToWide(info.title) << L"]";
+                ms << L", preset=" << Utf8ToWide(info.preset)
+                   << (info.exclusive ? L" (exclusive)" : L"");
                 wnd->PostLogLine(ms.str());
 
-                std::string displayStatus = info.isLive
-                    ? (info.isFreeChat ? "Live (Free)" : "Live (Private)")
-                    : "offline";
+                std::string displayStatus = isFreePreview ? "Live (Free Preview)" : "Live (Paid)";
 
                 // Update status column on main thread
                 PostMessage(wnd->GetHwnd(), WM_APP + 11,
                     (WPARAM)new std::string(model.username),
                     (LPARAM)new std::string(displayStatus));
 
-                if (info.isLive && info.isFreeChat && !recorder->IsRecording(model.username)) {
-                    log(L"    [Recorder] Starting recording...");
+                if (isFreePreview && !recorder->IsRecording(model.username)) {
+                    log(L"    [Recorder] Starting recording (free preview)...");
                     auto settings = wnd->GetSettings();
                     recorder->StartRecording(info, settings.authToken);
-                } else if (recorder->IsRecording(model.username) &&
-                           (!info.isLive || !info.isFreeChat)) {
-                    log(L"    [Recorder] No longer in free chat - stopping.");
+                } else if (recorder->IsRecording(model.username) && !info.isLive) {
+                    log(L"    [Recorder] No longer live - stopping.");
                     recorder->StopRecording(model.username);
                 }
             }

@@ -6,23 +6,46 @@ A Windows desktop application that automatically records **swag.live** live stre
 
 ## How recording works
 
-swag.live delivers streams over **WebRTC** — not HLS or RTMP.  The recorder is fully native: no FFmpeg, no WebView2, no NuGet packages.
+swag.live delivers streams over **Agora RTC** (an Agora.io WebRTC gateway), not plain HLS/RTMP.  The recorder is fully native: no FFmpeg, no WebView2, no NuGet packages.
 
-1. A **`rtc::WebSocket`** (built into libdatachannel) connects to swag.live's WebRTC signaling server.
-2. An **`rtc::PeerConnection`** creates a receive-only SDP offer for VP8/VP9 video and Opus audio.
-3. After the SDP offer/answer exchange, libdatachannel's built-in **`VP8RtpDepacketizer`** and **`OpusRtpDepacketizer`** media handlers reassemble RTP packets into complete frames.
-4. Assembled frames arrive via **`track->onFrame()`** callbacks.
-5. A hand-rolled (~300-line) **WebM/EBML muxer** writes frames directly to a **`.webm`** file — no external muxer library.
+### Discovery — three REST calls against `api.swag.live`
 
-Output files can be played directly in VLC or remuxed to MP4 without re-encoding:
+| # | Method | Endpoint | What we get |
+|---|--------|----------|-------------|
+| 1 | `GET` | `/feeds/user_livestream-v2?limit=100&page=1&sorting=desc:s_score` | JSON array of live users: `[{username, id, displayName}]` |
+| 2 | `GET` | `/pusher/retained-events?channels=private-enc-stream%40{userId}` | `stream.online` event → `session` ID, `preset`, `price` |
+| 3 | `GET` | `/streams/{sessionId}/token` | `agora_token`, `agora_token_session_id`, `agora_exp` |
+
+All three endpoints are unauthenticated for public/preview streams.
+
+### Agora signaling — two more REST calls
+
+| # | Method | Host | Path | Purpose |
+|---|--------|------|------|---------|
+| 4 | `POST` | `sua-ap-web-1.agora.io` | `/api/v1?action=stringuid` | Convert session UUID → numeric subscriber UID |
+| 5 | `POST` | `webrtc2-ap-web-1.agora.io` | `/api/v2/transpond/webrtc?v=2` (multipart form) | Fetch edge server IPs + DTLS fingerprints |
+
+The gateway response for step 5 contains `edges_services` (IP:port list) and `detail["19"]` (semicolon-separated SHA-256 DTLS fingerprints).
+
+### WebRTC connection
+
+A synthetic SDP answer is constructed from the gateway response and fed to a `libdatachannel` `PeerConnection`.  libdatachannel's built-in **`VP8RtpDepacketizer`** and **`OpusRtpDepacketizer`** handlers reassemble RTP packets into frames, which are then written to a `.webm` file by the hand-rolled **WebM/EBML muxer** (~300 lines, no external library).
+
+#### Agora constants (from PCAP)
+
+| Constant | Value |
+|----------|-------|
+| App ID | `19c9ed8fd65f4ea9b5de096362af989e` |
+| Pusher App Key | `aad17fe8f682717df2c0` |
+| Pusher App ID | `550591` |
+| Pusher Host | `ws-ap1.pusher.com` |
+| Pusher Auth | `api.swag.live/pusher/batch-authenticate` |
+
+Output files can be played in VLC or remuxed to MP4 without re-encoding:
 
 ```
 ffmpeg -i recording.webm -c copy output.mp4
 ```
-
-### Signaling notes
-
-The signaling implementation is a best-effort reverse-engineering of swag.live's WebRTC signaling endpoint.  The WebSocket URL and JSON message shapes are documented with `// TODO:` comments inside `LibDataChannelRecorder.cpp`.  If recording fails to connect, capture the real WebSocket traffic via browser DevTools → Network → WS and update those constants.
 
 ---
 
@@ -30,7 +53,7 @@ The signaling implementation is a best-effort reverse-engineering of swag.live's
 
 - **Win32 GUI** — watchlist with columns (username, enabled, status, bytes recorded), log area, settings panel
 - **Automatic monitoring** — background thread polls the swag.live API at a configurable interval (default: 60 s)
-- **Free-chat gating** — only starts recording when a model is live *and* in free chat; stops when they go private or offline
+- **Free-preview gating** — only starts recording when a model is live *and* in free preview (`preset=preview`, `price=0`); stops when they switch to paid mode or go offline
 - **Multiple simultaneous recordings** — each model gets its own independent PeerConnection / recording thread
 - **Persistent watchlist** — stored in `models.txt` next to the executable; survives restarts
 - **Auth token support** — paste your swag.live Bearer token so the API returns complete stream status data

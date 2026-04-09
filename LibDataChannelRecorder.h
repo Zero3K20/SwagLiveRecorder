@@ -2,18 +2,21 @@
 
 // LibDataChannelRecorder
 //
-// Records a swag.live stream without FFmpeg or WebView2:
-//  1. Connects to swag.live's WebRTC signaling server using rtc::WebSocket
-//     (built into libdatachannel – no WinHTTP WebSocket needed).
-//  2. Creates an rtc::PeerConnection with RecvOnly video + audio tracks.
-//  3. Uses libdatachannel's built-in VP8RtpDepacketizer / OpusRtpDepacketizer
-//     as media handlers; receives reassembled frames via track->onFrame().
-//  4. Muxes frames into a .webm file via the hand-rolled WebMMuxer.
+// Records a swag.live stream without FFmpeg or WebView2.
 //
-// ─── Build dependency ─────────────────────────────────────────────────────────
-//  libdatachannel (git submodule at deps/libdatachannel).
-//  Build it once with build_deps.cmd, then MSVC links datachannel.lib.
-//  No vcpkg, no NuGet, no FFmpeg.
+// Signaling (reverse-engineered from TLS-decrypted PCAP):
+//  1. SwagLiveAPI fetches the Agora token:
+//       GET api.swag.live /feeds/user_livestream-v2 → userId
+//       GET api.swag.live /pusher/retained-events?channels=private-enc-stream@{userId} → sessionId
+//       GET api.swag.live /streams/{sessionId}/token → agora_token
+//  2. LibDataChannelRecorder contacts the Agora gateway:
+//       POST sua-ap-web-1.agora.io/api/v1?action=stringuid → numeric UID
+//       POST webrtc2-ap-web-1.agora.io/api/v2/transpond/webrtc?v=2 (multipart)
+//           → edge server IPs + DTLS fingerprints
+//  3. A synthetic SDP answer is built from the gateway response and set as
+//     the remote description; libdatachannel then performs DTLS/SRTP to the
+//     Agora edge directly.
+//  4. VP8 + Opus frames are muxed into .webm by WebMMuxer.
 
 #ifndef UNICODE
 #define UNICODE
@@ -83,7 +86,5 @@ private:
 
     void RecordingThread();
     void AppendBytes(const uint8_t* data, size_t len);
-    bool OpenOutputFile();
-    void CloseOutputFile();
     void OnError(const std::string& msg);
 };

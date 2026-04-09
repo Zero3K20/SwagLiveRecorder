@@ -1,379 +1,229 @@
+// SwagLiveAPI.cpp
+//
+// Implementation of the swag.live REST discovery flow, fully reverse-engineered
+// from a TLS-decrypted network capture (Swag.live.pcap + sslkey.log).
+//
+// Discovery flow:
+//   1. FindLiveUser  – GET /feeds/user_livestream-v2 → search by username → userId
+//   2. GetStreamSession – GET /pusher/retained-events?channels=private-enc-stream@{userId}
+//                          → stream.online event → sessionId
+//   3. GetAgoraToken – GET /streams/{sessionId}/token → agora_token, agora_token_session_id
+
 #include "SwagLiveAPI.h"
 #include "tlsclient/tlsclient.h"
 #include "json_minimal.h"
 
-#include <iostream>
-#include <sstream>
 #include <algorithm>
 #include <cctype>
+#include <sstream>
 
-// Base URL for the swag.live API
-static const std::string SWAG_API_BASE = "https://api.swag.live";
+// ─── Base URL ─────────────────────────────────────────────────────────────────
+static const std::string SWAG_API = "https://api.swag.live";
 
-// Fallback to the main domain if the above doesn't work
-static const std::string SWAG_MAIN_HOST = "https://swag.live";
+// ─── Constructor ──────────────────────────────────────────────────────────────
+SwagLiveAPI::SwagLiveAPI() = default;
 
-SwagLiveAPI::SwagLiveAPI() {
-}
-
-bool SwagLiveAPI::ApiGet(const std::string& path, std::string& responseBody) {
+// ─── Internal HTTP helper ─────────────────────────────────────────────────────
+bool SwagLiveAPI::ApiGet(const std::string& path, std::string& body) {
     TLSClient client;
 
-    std::string url = SWAG_API_BASE + path;
-    std::string headers;
+    // Headers observed in PCAP for every api.swag.live request:
+    std::string hdrs;
+    hdrs += "Accept: application/json\r\n";
+    hdrs += "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/127.0.0.0 Safari/537.36\r\n";
+    hdrs += "x-version: 3.281.0\r\n";
+    hdrs += "Origin: https://swag.live\r\n";
+    hdrs += "Referer: https://swag.live/\r\n";
 
-    headers += "Accept: application/json\r\n";
-    headers += "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-               "AppleWebKit/537.36 (KHTML, like Gecko) "
-               "Chrome/120.0.0.0 Safari/537.36\r\n";
-    headers += "Origin: https://swag.live\r\n";
-    headers += "Referer: https://swag.live/\r\n";
+    if (!m_clientId.empty())
+        hdrs += "x-client-id: " + m_clientId + "\r\n";
+    if (!m_sessionId.empty())
+        hdrs += "x-session-id: " + m_sessionId + "\r\n";
+    if (!m_authToken.empty())
+        hdrs += "Authorization: Bearer " + m_authToken + "\r\n";
 
-    if (!m_authToken.empty()) {
-        headers += "Authorization: Bearer " + m_authToken + "\r\n";
-    }
-
-    std::string rawResponse;
-    if (!client.HttpGet(url, rawResponse, headers)) {
-        m_lastError = "HTTP GET failed for " + url + ": " + client.GetLastError();
+    std::string raw;
+    if (!client.HttpGet(SWAG_API + path, raw, hdrs)) {
+        m_lastError = "HTTP GET failed: " + client.GetLastError();
         return false;
     }
 
-    // Extract HTTP body (skip headers)
-    responseBody = get_http_body(rawResponse);
-    if (responseBody.empty()) {
-        // Sometimes the raw response is just the body (WinHTTP)
-        responseBody = rawResponse;
-    }
-
+    body = get_http_body(raw);
+    if (body.empty()) body = raw;   // WinHTTP sometimes returns body directly
     return true;
 }
 
-// Parse a JSON object representing a single stream into StreamInfo
-StreamInfo SwagLiveAPI::ParseStreamInfo(const std::string& json) {
-    StreamInfo info;
-    JsonValue root = parse_json(json);
-
-    if (root.is_null()) return info;
-
-    // Try common field names used by streaming platforms
-    // The exact field names depend on swag.live's actual API response structure
-
-    // Stream ID
-    if (!root["id"].is_null())
-        info.streamId = root["id"].as_str();
-    else if (!root["streamId"].is_null())
-        info.streamId = root["streamId"].as_str();
-    else if (!root["stream_id"].is_null())
-        info.streamId = root["stream_id"].as_str();
-
-    // Username / slug
-    if (!root["username"].is_null())
-        info.username = root["username"].as_str();
-    else if (!root["slug"].is_null())
-        info.username = root["slug"].as_str();
-    else if (!root["name"].is_null())
-        info.username = root["name"].as_str();
-
-    // Try nested "user" or "model" object
-    if (info.username.empty()) {
-        const JsonValue& user = root["user"];
-        if (!user.is_null()) {
-            if (!user["username"].is_null())
-                info.username = user["username"].as_str();
-            else if (!user["slug"].is_null())
-                info.username = user["slug"].as_str();
-        }
-        const JsonValue& model = root["model"];
-        if (!model.is_null() && info.username.empty()) {
-            if (!model["username"].is_null())
-                info.username = model["username"].as_str();
-        }
-    }
-
-    // Display name
-    if (!root["displayName"].is_null())
-        info.displayName = root["displayName"].as_str();
-    else if (!root["display_name"].is_null())
-        info.displayName = root["display_name"].as_str();
-    else if (!root["nickname"].is_null())
-        info.displayName = root["nickname"].as_str();
-
-    // Stream status
-    if (!root["status"].is_null())
-        info.status = root["status"].as_str();
-    else if (!root["liveStatus"].is_null())
-        info.status = root["liveStatus"].as_str();
-
-    // Chat/room mode
-    if (!root["chatMode"].is_null())
-        info.chatMode = root["chatMode"].as_str();
-    else if (!root["roomMode"].is_null())
-        info.chatMode = root["roomMode"].as_str();
-    else if (!root["mode"].is_null())
-        info.chatMode = root["mode"].as_str();
-
-    // Thumbnail
-    if (!root["thumbnailUrl"].is_null())
-        info.thumbnailUrl = root["thumbnailUrl"].as_str();
-    else if (!root["thumbnail"].is_null())
-        info.thumbnailUrl = root["thumbnail"].as_str();
-    else if (!root["previewUrl"].is_null())
-        info.thumbnailUrl = root["previewUrl"].as_str();
-
-    // Viewer count
-    if (!root["viewerCount"].is_null())
-        info.viewerCount = (int)root["viewerCount"].as_num();
-    else if (!root["viewers"].is_null())
-        info.viewerCount = (int)root["viewers"].as_num();
-    else if (!root["viewCount"].is_null())
-        info.viewerCount = (int)root["viewCount"].as_num();
-
-    // Stream token (for accessing restricted streams)
-    if (!root["token"].is_null())
-        info.streamToken = root["token"].as_str();
-    else if (!root["streamToken"].is_null())
-        info.streamToken = root["streamToken"].as_str();
-
-    // Determine live status
-    std::string statusLower = info.status;
-    std::transform(statusLower.begin(), statusLower.end(), statusLower.begin(),
-        [](unsigned char c) { return (char)std::tolower(c); });
-
-    info.isLive = (statusLower == "live" || statusLower == "online" ||
-                   statusLower == "broadcasting" || statusLower == "public");
-
-    // If no status field but we got stream data, assume it's live
-    if (!root["isLive"].is_null())
-        info.isLive = root["isLive"].as_bool();
-    else if (!root["is_live"].is_null())
-        info.isLive = root["is_live"].as_bool();
-    else if (!root["online"].is_null())
-        info.isLive = root["online"].as_bool();
-
-    // Determine free chat status
-    std::string modeLower = info.chatMode;
-    std::transform(modeLower.begin(), modeLower.end(), modeLower.begin(),
-        [](unsigned char c) { return (char)std::tolower(c); });
-
-    // Determine free chat status - require explicit free/public mode indicator;
-    // do not assume free chat when the mode is absent to avoid recording
-    // private or group shows unintentionally.
-    info.isFreeChat = (modeLower == "free" || modeLower == "public" ||
-                       modeLower == "freechat" || modeLower == "free_chat");
-
-    if (!root["isFreeChat"].is_null())
-        info.isFreeChat = root["isFreeChat"].as_bool();
-
-    return info;
-}
-
-bool SwagLiveAPI::GetLiveStreams(std::vector<StreamInfo>& outStreams) {
-    outStreams.clear();
-
-    // Try common API endpoints for listing live streams
-    // These endpoints are typical for cam site APIs
-    const char* endpoints[] = {
-        "/livestream/onGoingList",
-        "/livestreams",
-        "/livestream/list",
-        "/live/list",
-        "/streams",
-        nullptr
-    };
-
-    std::string responseBody;
-    bool success = false;
-
-    for (int i = 0; endpoints[i] != nullptr; ++i) {
-        if (ApiGet(endpoints[i], responseBody) && !responseBody.empty()) {
-            // Check if it looks like JSON
-            if (!responseBody.empty() && (responseBody[0] == '{' || responseBody[0] == '[')) {
-                success = true;
-                break;
-            }
-        }
-        responseBody.clear();
-    }
-
-    if (!success || responseBody.empty()) {
-        m_lastError = "Failed to fetch live stream list from API";
-        return false;
-    }
-
-    // Parse the response - handle both array and object wrapping
-    JsonValue root = parse_json(responseBody);
-
-    if (root.is_null()) {
-        m_lastError = "Failed to parse API response as JSON";
-        return false;
-    }
-
-    // The response might be a direct array, or wrapped in an object
-    const JsonValue* arrayNode = nullptr;
-
-    if (root.type == JsonValue::Type::Array) {
-        arrayNode = &root;
-    } else if (root.type == JsonValue::Type::Object) {
-        // Try common wrapper keys
-        const char* wrapKeys[] = { "data", "streams", "list", "items", "results", nullptr };
-        for (int i = 0; wrapKeys[i] != nullptr; ++i) {
-            if (!root[wrapKeys[i]].is_null() &&
-                root[wrapKeys[i]].type == JsonValue::Type::Array) {
-                arrayNode = &root[wrapKeys[i]];
-                break;
-            }
-        }
-    }
-
-    if (!arrayNode) {
-        m_lastError = "Unexpected JSON structure in API response";
-        return false;
-    }
-
-    for (size_t i = 0; i < arrayNode->size(); ++i) {
-        // Re-serialize each array element for ParseStreamInfo
-        // Since we have a minimal JSON parser, extract from the already-parsed tree
-        const JsonValue& item = (*arrayNode)[i];
-        if (item.is_null()) continue;
-
-        StreamInfo info;
-
-        // Extract fields directly from parsed JSON
-        if (!item["id"].is_null())
-            info.streamId = item["id"].as_str();
-        else if (!item["streamId"].is_null())
-            info.streamId = item["streamId"].as_str();
-
-        if (!item["username"].is_null())
-            info.username = item["username"].as_str();
-        else if (!item["slug"].is_null())
-            info.username = item["slug"].as_str();
-
-        const JsonValue& user = item["user"];
-        if (!user.is_null() && info.username.empty()) {
-            if (!user["username"].is_null())
-                info.username = user["username"].as_str();
-        }
-
-        if (!item["displayName"].is_null())
-            info.displayName = item["displayName"].as_str();
-        else if (!item["display_name"].is_null())
-            info.displayName = item["display_name"].as_str();
-        else if (!item["nickname"].is_null())
-            info.displayName = item["nickname"].as_str();
-
-        if (!item["status"].is_null())
-            info.status = item["status"].as_str();
-
-        if (!item["chatMode"].is_null())
-            info.chatMode = item["chatMode"].as_str();
-        else if (!item["roomMode"].is_null())
-            info.chatMode = item["roomMode"].as_str();
-
-        if (!item["thumbnailUrl"].is_null())
-            info.thumbnailUrl = item["thumbnailUrl"].as_str();
-        else if (!item["thumbnail"].is_null())
-            info.thumbnailUrl = item["thumbnail"].as_str();
-
-        if (!item["viewerCount"].is_null())
-            info.viewerCount = (int)item["viewerCount"].as_num();
-        else if (!item["viewers"].is_null())
-            info.viewerCount = (int)item["viewers"].as_num();
-
-        if (!item["token"].is_null())
-            info.streamToken = item["token"].as_str();
-
-        // Determine live/free chat status
-        std::string statusLower = info.status;
-        std::transform(statusLower.begin(), statusLower.end(), statusLower.begin(),
-            [](unsigned char c) { return (char)std::tolower(c); });
-
-        info.isLive = (statusLower == "live" || statusLower == "online" ||
-                       statusLower == "broadcasting" || statusLower == "public");
-
-        if (!item["isLive"].is_null())
-            info.isLive = item["isLive"].as_bool();
-        else if (!item["online"].is_null())
-            info.isLive = item["online"].as_bool();
-
-        std::string modeLower = info.chatMode;
-        std::transform(modeLower.begin(), modeLower.end(), modeLower.begin(),
-            [](unsigned char c) { return (char)std::tolower(c); });
-
-        info.isFreeChat = (modeLower == "free" || modeLower == "public" ||
-                           modeLower == "freechat" || modeLower == "free_chat");
-
-        if (!item["isFreeChat"].is_null())
-            info.isFreeChat = item["isFreeChat"].as_bool();
-
-        outStreams.push_back(info);
-    }
-
-    return true;
-}
-
-bool SwagLiveAPI::GetModelStatus(const std::string& username, StreamInfo& outInfo) {
+// ─── FindLiveUser ─────────────────────────────────────────────────────────────
+//
+// GET /feeds/user_livestream-v2?limit=100&page=1&sorting=desc:s_score
+//
+// Response: JSON array of objects:
+//   [{ "username": "lysr7777",
+//      "id":       "697f4adbf87c532036bc8062",
+//      "displayName": "小茴",
+//      "badges": ["country:cn"],
+//      "metadata": {…} }, …]
+//
+// We walk through pages until we find the username or exhaust results.
+bool SwagLiveAPI::FindLiveUser(const std::string& username, StreamInfo& outInfo) {
     if (username.empty()) {
-        m_lastError = "Username cannot be empty";
+        m_lastError = "Username must not be empty";
         return false;
     }
 
-    // Try common per-model status endpoints
-    // URL-encode the username (simple version - no special chars expected)
-    std::string responseBody;
-    bool success = false;
-
-    const std::string paths[] = {
-        "/livestream/" + username,
-        "/user/" + username + "/livestream",
-        "/model/" + username + "/stream",
-        "/live/" + username,
-        ""
+    // Case-insensitive comparison helper
+    auto toLower = [](std::string s) {
+        std::transform(s.begin(), s.end(), s.begin(),
+                       [](unsigned char c){ return (char)std::tolower(c); });
+        return s;
     };
+    const std::string targetLc = toLower(username);
 
-    for (size_t i = 0; !paths[i].empty(); ++i) {
-        if (ApiGet(paths[i], responseBody) && !responseBody.empty()) {
-            if (!responseBody.empty() && (responseBody[0] == '{' || responseBody[0] == '[')) {
-                success = true;
-                break;
+    for (int page = 1; page <= 20; ++page) {
+        std::ostringstream path;
+        path << "/feeds/user_livestream-v2?limit=100&page=" << page
+             << "&sorting=desc:s_score";
+
+        std::string body;
+        if (!ApiGet(path.str(), body)) return false;
+
+        JsonValue root = parse_json(body);
+        if (root.is_null() || root.type != JsonValue::Type::Array) {
+            m_lastError = "Unexpected /feeds/user_livestream-v2 response";
+            return false;
+        }
+
+        bool foundAny = false;
+        for (size_t i = 0; i < root.size(); ++i) {
+            const JsonValue& item = root[i];
+            if (item.is_null()) continue;
+            foundAny = true;
+
+            std::string uname = item["username"].as_str();
+            if (toLower(uname) == targetLc) {
+                outInfo.username    = uname;
+                outInfo.userId      = item["id"].as_str();
+                outInfo.displayName = item["displayName"].as_str();
+                outInfo.isLive      = true;
+                return true;
             }
         }
-        responseBody.clear();
+
+        // Fewer than 100 results → we've reached the last page
+        if (!foundAny || root.size() < 100) break;
     }
 
-    if (!success || responseBody.empty()) {
-        // Fallback: search the live stream list
-        std::vector<StreamInfo> streams;
-        if (GetLiveStreams(streams)) {
-            std::string usernameLower = username;
-            std::transform(usernameLower.begin(), usernameLower.end(), usernameLower.begin(),
-                [](unsigned char c) { return (char)std::tolower(c); });
+    m_lastError = "User '" + username + "' not found in live feed";
+    return false;
+}
 
-            for (const auto& stream : streams) {
-                std::string streamNameLower = stream.username;
-                std::transform(streamNameLower.begin(), streamNameLower.end(),
-                    streamNameLower.begin(),
-                    [](unsigned char c) { return (char)std::tolower(c); });
-
-                if (streamNameLower == usernameLower) {
-                    outInfo = stream;
-                    return true;
-                }
-            }
-        }
-
-        outInfo.username = username;
-        outInfo.isLive = false;
-        outInfo.isFreeChat = false;
-        m_lastError = "Model not found or not currently live";
+// ─── GetStreamSession ─────────────────────────────────────────────────────────
+//
+// GET /pusher/retained-events?channels=private-enc-stream%40{userId}
+//
+// Response shape:
+//   { "private-enc-stream@{userId}": [
+//       { "event": "stream.online",
+//         "data": {
+//           "session":   "69d808eb65fd2d2df88eec4b",
+//           "title":     "…",
+//           "preset":    "preview",
+//           "exclusive": false,
+//           "price":     0,
+//           "categories": […]
+//         } } ] }
+bool SwagLiveAPI::GetStreamSession(StreamInfo& outInfo) {
+    if (outInfo.userId.empty()) {
+        m_lastError = "userId required before calling GetStreamSession";
         return false;
     }
 
-    outInfo = ParseStreamInfo(responseBody);
-    if (outInfo.username.empty()) {
-        outInfo.username = username;
+    const std::string path =
+        "/pusher/retained-events?channels=private-enc-stream%40" + outInfo.userId;
+
+    std::string body;
+    if (!ApiGet(path, body)) return false;
+
+    JsonValue root = parse_json(body);
+    if (root.is_null() || root.type != JsonValue::Type::Object) {
+        m_lastError = "Unexpected /pusher/retained-events response";
+        return false;
     }
 
+    // The key is "private-enc-stream@{userId}"
+    const std::string channelKey = "private-enc-stream@" + outInfo.userId;
+    const JsonValue& events = root[channelKey];
+    if (events.is_null() || events.type != JsonValue::Type::Array || events.size() == 0) {
+        m_lastError = "No retained events for user " + outInfo.userId + " – user may not be live";
+        return false;
+    }
+
+    // Find the "stream.online" event
+    for (size_t i = 0; i < events.size(); ++i) {
+        const JsonValue& ev = events[i];
+        if (ev["event"].as_str() != "stream.online") continue;
+
+        const JsonValue& data = ev["data"];
+        if (data.is_null()) continue;
+
+        outInfo.sessionId  = data["session"].as_str();
+        outInfo.title      = data["title"].as_str();
+        outInfo.preset     = data["preset"].as_str();
+        outInfo.exclusive  = data["exclusive"].as_bool();
+        outInfo.price      = static_cast<int>(data["price"].as_num());
+        outInfo.isLive     = true;
+        return true;
+    }
+
+    m_lastError = "stream.online event not found for user " + outInfo.userId;
+    return false;
+}
+
+// ─── GetAgoraToken ────────────────────────────────────────────────────────────
+//
+// GET /streams/{sessionId}/token
+//
+// Response:
+//   { "agora_token":            "00619c9ed8…",   // subscribe (uid=0)
+//     "agora_token_session_id": "00619c9ed8…",   // publish-capable (uid!=0)
+//     "agora_exp":              1775766844 }
+//
+// No auth header required – the server issues a guest viewer token.
+bool SwagLiveAPI::GetAgoraToken(StreamInfo& outInfo) {
+    if (outInfo.sessionId.empty()) {
+        m_lastError = "sessionId required before calling GetAgoraToken";
+        return false;
+    }
+
+    const std::string path = "/streams/" + outInfo.sessionId + "/token";
+
+    std::string body;
+    if (!ApiGet(path, body)) return false;
+
+    JsonValue root = parse_json(body);
+    if (root.is_null() || root.type != JsonValue::Type::Object) {
+        m_lastError = "Unexpected /streams/{id}/token response";
+        return false;
+    }
+
+    outInfo.agoraToken          = root["agora_token"].as_str();
+    outInfo.agoraTokenSessionId = root["agora_token_session_id"].as_str();
+    outInfo.agoraExp            = static_cast<int64_t>(root["agora_exp"].as_num());
+    outInfo.agoraChannel        = outInfo.sessionId;  // channel == session ID
+
+    if (outInfo.agoraToken.empty()) {
+        m_lastError = "agora_token missing in /streams/{id}/token response";
+        return false;
+    }
     return true;
+}
+
+// ─── ResolveStream ────────────────────────────────────────────────────────────
+bool SwagLiveAPI::ResolveStream(const std::string& username, StreamInfo& outInfo) {
+    outInfo = StreamInfo{};
+    return FindLiveUser(username, outInfo)
+        && GetStreamSession(outInfo)
+        && GetAgoraToken(outInfo);
 }
