@@ -73,7 +73,7 @@ public:
     // Append a line to the log area.
     void AppendLog(const std::wstring& line);
 
-    // Provide access to the HWND (needed by Recorder to parent WebView2 hosts).
+    // Provide access to the HWND (needed by some callers for parenting dialogs).
     HWND GetHwnd() const { return m_hwnd; }
 
     // Callbacks set by main code

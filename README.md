@@ -6,19 +6,23 @@ A Windows desktop application that automatically records **swag.live** live stre
 
 ## How recording works
 
-swag.live delivers streams over **WebRTC** — not HLS or RTMP.  The program uses the same technique as the [LivestreamRecorder userscript](https://github.com/zero3k20/LivestreamRecorder):
+swag.live delivers streams over **WebRTC** — not HLS or RTMP.  The recorder is fully native: no FFmpeg, no WebView2, no NuGet packages.
 
-1. A hidden **WebView2** (Edge-based) browser instance opens the model's stream page (`https://swag.live/livestream/<username>`).
-2. JavaScript is injected at document-start that **hooks `HTMLMediaElement.prototype.srcObject`**.  When the page's player assigns a `MediaStream` to a `<video>` element, the hook fires.
-3. The browser's built-in **`MediaRecorder` API** records the stream as a series of 500 ms WebM/VP8+Opus chunks.
-4. Each chunk is base64-encoded and sent to the C++ host via `window.chrome.webview.postMessage`.
-5. The C++ side decodes the chunk and appends it to the output **`.webm`** file on disk — no buffering in memory.
+1. A **`rtc::WebSocket`** (built into libdatachannel) connects to swag.live's WebRTC signaling server.
+2. An **`rtc::PeerConnection`** creates a receive-only SDP offer for VP8/VP9 video and Opus audio.
+3. After the SDP offer/answer exchange, libdatachannel's built-in **`VP8RtpDepacketizer`** and **`OpusRtpDepacketizer`** media handlers reassemble RTP packets into complete frames.
+4. Assembled frames arrive via **`track->onFrame()`** callbacks.
+5. A hand-rolled (~300-line) **WebM/EBML muxer** writes frames directly to a **`.webm`** file — no external muxer library.
 
 Output files can be played directly in VLC or remuxed to MP4 without re-encoding:
 
 ```
 ffmpeg -i recording.webm -c copy output.mp4
 ```
+
+### Signaling notes
+
+The signaling implementation is a best-effort reverse-engineering of swag.live's WebRTC signaling endpoint.  The WebSocket URL and JSON message shapes are documented with `// TODO:` comments inside `LibDataChannelRecorder.cpp`.  If recording fails to connect, capture the real WebSocket traffic via browser DevTools → Network → WS and update those constants.
 
 ---
 
@@ -27,9 +31,10 @@ ffmpeg -i recording.webm -c copy output.mp4
 - **Win32 GUI** — watchlist with columns (username, enabled, status, bytes recorded), log area, settings panel
 - **Automatic monitoring** — background thread polls the swag.live API at a configurable interval (default: 60 s)
 - **Free-chat gating** — only starts recording when a model is live *and* in free chat; stops when they go private or offline
-- **Multiple simultaneous recordings** — each model gets its own independent WebView2 / MediaRecorder session
+- **Multiple simultaneous recordings** — each model gets its own independent PeerConnection / recording thread
 - **Persistent watchlist** — stored in `models.txt` next to the executable; survives restarts
 - **Auth token support** — paste your swag.live Bearer token so the API returns complete stream status data
+- **No vcpkg / NuGet** — libdatachannel is a git submodule; build it once with `build_deps.cmd`
 
 ---
 
@@ -38,33 +43,46 @@ ffmpeg -i recording.webm -c copy output.mp4
 ### Build
 | Component | Version |
 |-----------|---------|
-| Visual Studio | 2019 (toolset v142) |
+| Visual Studio | 2019 (toolset v142) or later |
 | Windows SDK | 10.0 |
 | C++ standard | C++17 |
-| NuGet package | `Microsoft.Web.WebView2` 1.0.2739.15 |
-| NuGet package | `Microsoft.Windows.ImplementationLibrary` 1.0.240122.1 (WIL — shipped with the WebView2 package) |
+| CMake | 3.13+ (for building libdatachannel) |
 
 ### Runtime
 | Component | Notes |
 |-----------|-------|
-| Windows 10 1803+ or Windows 11 | WebView2 runtime ships with Win11 and is auto-updated on Win10 |
-| WebView2 Runtime | Installed automatically via Windows Update; can also be installed manually from [aka.ms/webview2](https://developer.microsoft.com/microsoft-edge/webview2/) |
+| Windows 10 1803+ or Windows 11 | |
+| `datachannel.dll` | Built by `build_deps.cmd`; copied automatically to the output directory by a post-build event |
 
 ---
 
 ## Building
 
-1. **Clone or download** this repository.
-2. **Restore NuGet packages** — open a Developer Command Prompt and run:
-   ```
-   nuget restore SwagLiveRecorder.sln
-   ```
-   Or open the solution in Visual Studio 2019 and let the automatic package restore run.
-3. **Open** `SwagLiveRecorder.sln` in Visual Studio 2019.
-4. Select the **Release | x64** (or Win32) configuration and press **Build → Build Solution** (`Ctrl+Shift+B`).
-5. The executable is written to `x64\Release\SwagLiveRecorder.exe`.
+### One-time setup (build libdatachannel)
 
-> **Note on WIL:** the Windows Implementation Library (`wil/com.h`) is included as a NuGet dependency of WebView2.  No separate download is needed after NuGet restore.
+From a **Developer Command Prompt for VS 2019** (so that `cmake` and `cl` are on the PATH):
+
+```bat
+git clone --recurse-submodules https://github.com/Zero3K20/SwagLiveRecorder.git
+cd SwagLiveRecorder
+build_deps.cmd
+```
+
+`build_deps.cmd` will:
+1. Run `git submodule update --init --recursive --depth 1` to populate `deps/libdatachannel`.
+2. Configure the library with CMake (uses Mbed TLS — no OpenSSL installation needed).
+3. Build both **Release** and **Debug** configurations.
+
+The resulting `datachannel.lib` / `datachannel.dll` land in `deps\libdatachannel\build\Release\` and `Debug\`.
+
+### Build the application
+
+1. **Open** `SwagLiveRecorder.sln` in Visual Studio 2019 (or later).
+2. Select **Release | x64** and press `Ctrl+Shift+B`.
+3. The post-build event automatically copies `datachannel.dll` next to the executable.
+4. The executable is written to `x64\Release\SwagLiveRecorder.exe`.
+
+> **No NuGet restore needed.**  All dependencies are in-tree.
 
 ---
 
@@ -93,20 +111,23 @@ ffmpeg -i recording.webm -c copy output.mp4
 
 ```
 SwagLiveRecorder/
-├── SwagLiveRecorder.cpp       # WinMain entry point, monitor thread, app wiring
-├── MainWindow.h/.cpp          # Win32 GUI — watchlist listview, log, settings
-├── WebRTCRecorder.h/.cpp      # Per-model WebView2 + MediaRecorder recording session
-├── Recorder.h/.cpp            # Multi-session manager delegating to WebRTCRecorder
-├── SwagLiveAPI.h/.cpp         # HTTPS API client for swag.live (uses TLSClient)
-├── ModelList.h/.cpp           # Persistent watchlist (models.txt)
-├── json_minimal.h             # Minimal single-header JSON parser
-├── chunked_decode.h           # HTTP chunked-transfer decoder
-├── tlsclient/                 # TLS/WinHTTP client (from Tardsplaya project)
-│   ├── tlsclient.h
-│   ├── tlsclient.cpp
+├── SwagLiveRecorder.cpp           # WinMain, monitor thread, app wiring
+├── MainWindow.h/.cpp              # Win32 GUI
+├── LibDataChannelRecorder.h/.cpp  # WebRTC recorder (signaling + PeerConnection + muxer)
+├── WebMMuxer.h/.cpp               # Hand-rolled EBML/WebM muxer (~300 lines, no external lib)
+├── RTPDepayloader.h               # Standalone VP8/VP9/Opus RTP depayloaders (reference)
+├── Recorder.h/.cpp                # Multi-session manager
+├── SwagLiveAPI.h/.cpp             # HTTPS API client (WinHTTP/TLSClient)
+├── ModelList.h/.cpp               # Persistent watchlist
+├── json_minimal.h                 # Single-header JSON parser
+├── chunked_decode.h               # HTTP chunked-transfer decoder
+├── tlsclient/                     # WinHTTP TLS client
+│   ├── tlsclient.h/.cpp
 │   └── lock.h
-├── packages.config            # NuGet package references
-├── SwagLiveRecorder.vcxproj   # VS2019 project (Windows app, v142 toolset)
+├── deps/
+│   └── libdatachannel/            # Git submodule (paullouisageneau/libdatachannel)
+├── build_deps.cmd                 # One-shot CMake build of libdatachannel
+├── SwagLiveRecorder.vcxproj       # VS2019 project
 └── SwagLiveRecorder.sln
 ```
 
@@ -114,10 +135,13 @@ SwagLiveRecorder/
 
 ## TLS client
 
-The TLS client used to query the swag.live API is based on the implementation in the [Tardsplaya project](https://github.com/Zero3K/Tardsplaya/tree/main/tlsclient).  It uses Windows' built-in **WinHTTP** stack — no OpenSSL or other third-party TLS library is required.
+The TLS client used to query the swag.live API is based on the implementation in the [Tardsplaya project](https://github.com/Zero3K/Tardsplaya/tree/main/tlsclient).  It uses Windows' built-in **WinHTTP** stack — no OpenSSL or other third-party TLS library is required for the API layer.
+
+libdatachannel uses **Mbed TLS** (compiled as a submodule) for its own DTLS/TLS stack.
 
 ---
 
 ## Output format
 
-Recordings are saved as **`.webm`** files (WebM container, VP8 or VP9 video, Opus audio) — the native output of the browser's `MediaRecorder` API.  This is the same format produced by the LivestreamRecorder userscript for WebRTC streams.
+Recordings are saved as **`.webm`** files (WebM container, VP8 video, Opus audio).
+

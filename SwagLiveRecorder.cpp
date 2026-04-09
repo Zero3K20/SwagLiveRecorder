@@ -4,15 +4,13 @@
 // Architecture:
 //   - Win32 GUI (MainWindow) for the watchlist, recording status, and settings
 //   - Background monitor thread polls the swag.live API (SwagLiveAPI + TLSClient)
-//   - WebView2-embedded browser (WebRTCRecorder) records each stream using the
-//     browser's MediaRecorder API, writing chunks as .webm files to disk
-//     (same technique as the LivestreamRecorder userscript)
+//   - LibDataChannelRecorder performs WebRTC signaling + media receipt using the
+//     libdatachannel library (submodule at deps/libdatachannel) and writes
+//     directly to .webm files via the hand-rolled WebMMuxer.
 //
 // Build requirements:
 //   - Visual Studio 2019 (toolset v142), Windows SDK 10.0
-//   - Microsoft.Web.WebView2 NuGet package (run: nuget restore)
-//   - WebView2 Runtime installed on the target machine (ships with Windows 11;
-//     auto-updated via Windows Update on Win10 1803+)
+//   - libdatachannel submodule: run build_deps.cmd once before building
 //=============================================================================
 
 #ifndef UNICODE
@@ -112,12 +110,10 @@ static void MonitorThreadProc(MainWindow* wnd,
                     // Stop any running recording for this model
                     if (recorder->IsRecording(model.username)) {
                         log(L"    [Recorder] Model offline - stopping recording.");
-                        // Must post to main thread to stop (WebView2 is main-thread only)
-                        SendMessage(wnd->GetHwnd(), WM_APP + 10,
-                            (WPARAM)new std::string(model.username), 0);
+                        recorder->StopRecording(model.username);
                     }
                     // Update status in list
-                    SendMessage(wnd->GetHwnd(), WM_APP + 11,
+                    PostMessage(wnd->GetHwnd(), WM_APP + 11,
                         (WPARAM)new std::string(model.username),
                         (LPARAM)new std::string("offline"));
                     continue;
@@ -135,21 +131,18 @@ static void MonitorThreadProc(MainWindow* wnd,
                     : "offline";
 
                 // Update status column on main thread
-                SendMessage(wnd->GetHwnd(), WM_APP + 11,
+                PostMessage(wnd->GetHwnd(), WM_APP + 11,
                     (WPARAM)new std::string(model.username),
                     (LPARAM)new std::string(displayStatus));
 
                 if (info.isLive && info.isFreeChat && !recorder->IsRecording(model.username)) {
                     log(L"    [Recorder] Starting recording...");
-                    // Start must be called on main thread (WebView2 requirement)
-                    // We copy the StreamInfo onto the heap and post it
-                    SendMessage(wnd->GetHwnd(), WM_APP + 12,
-                        (WPARAM)new StreamInfo(info), 0);
+                    auto settings = wnd->GetSettings();
+                    recorder->StartRecording(info, settings.authToken);
                 } else if (recorder->IsRecording(model.username) &&
                            (!info.isLive || !info.isFreeChat)) {
                     log(L"    [Recorder] No longer in free chat - stopping.");
-                    SendMessage(wnd->GetHwnd(), WM_APP + 10,
-                        (WPARAM)new std::string(model.username), 0);
+                    recorder->StopRecording(model.username);
                 }
             }
         }
@@ -184,15 +177,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
         return 1;
     }
 
-    // ── Create recorder (main thread, shares message loop) ───────────────────
+    // ── Create recorder ───────────────────────────────────────────────────────
     RecorderConfig recCfg;
     recCfg.outputDirectory = app.outputDir;
     recCfg.appendTimestamp = true;
 
-    Recorder recorder(recCfg, mainWnd.GetHwnd());
+    Recorder recorder(recCfg);
     app.recorder = &recorder;
 
-    // Recorder callbacks → update GUI
+    // Recorder callbacks → update GUI (callbacks may fire from the recorder's
+    // background thread, so use PostMessage rather than direct UI calls).
     recorder.onStarted = [&](const std::string& u) {
         mainWnd.UpdateRecordingStatus(u, "● Recording");
         mainWnd.PostLogLine(L"[Recorder] Started: " + Utf8ToWide(u));
@@ -254,8 +248,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
     };
     mainWnd.onStopMonitor = [&]() {
         app.stopMonitor.store(true);
-        // Join on a helper thread so the main message loop keeps running
-        // (WebView2 requires the main thread to keep pumping messages)
         if (app.monThread.joinable()) {
             std::thread joiner([&]() {
                 if (app.monThread.joinable()) app.monThread.join();
@@ -268,69 +260,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
     // Populate model list from file
     mainWnd.RefreshModelList(app.modelList);
 
-    // ── Sub-class the main window HWND to handle custom WM_APP messages
-    //    (main-thread operations posted from the monitor thread) ──────────────
-    static WNDPROC origProc = nullptr;
-    origProc = reinterpret_cast<WNDPROC>(
-        SetWindowLongPtrW(mainWnd.GetHwnd(), GWLP_WNDPROC,
-            reinterpret_cast<LONG_PTR>(
-                [](HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) -> LRESULT {
-                    static AppState* pApp = nullptr;
-                    static Recorder* pRec = nullptr;
-                    static MainWindow* pWnd = nullptr;
-
-                    // First call: store pointers via WM_CREATE can't work here since
-                    // we subclass after creation.  Use thread-local-like statics set
-                    // from the enclosing lambda capture – we use a trick via WM_USER.
-                    if (msg == WM_USER + 99) {
-                        pApp = reinterpret_cast<AppState*>(wp);
-                        pRec = reinterpret_cast<Recorder*>(lp);
-                        pWnd = pApp->mainWnd;
-                        return 0;
-                    }
-                    if (!pRec) {
-                        return CallWindowProcW(origProc, hwnd, msg, wp, lp);
-                    }
-
-                    // WM_APP+10: stop recording for username (heap string, we free it)
-                    if (msg == WM_APP + 10) {
-                        auto* name = reinterpret_cast<std::string*>(wp);
-                        if (name) { pRec->StopRecording(*name); delete name; }
-                        return 0;
-                    }
-                    // WM_APP+11: update status label (heap strings, we free them)
-                    if (msg == WM_APP + 11) {
-                        auto* name   = reinterpret_cast<std::string*>(wp);
-                        auto* status = reinterpret_cast<std::string*>(lp);
-                        if (name && status && pWnd)
-                            pWnd->UpdateRecordingStatus(*name, *status);
-                        delete name; delete status;
-                        return 0;
-                    }
-                    // WM_APP+12: start recording (heap StreamInfo, we free it)
-                    if (msg == WM_APP + 12) {
-                        auto* info = reinterpret_cast<StreamInfo*>(wp);
-                        if (info) { pRec->StartRecording(*info); delete info; }
-                        return 0;
-                    }
-                    return CallWindowProcW(origProc, hwnd, msg, wp, lp);
-                }
-            )
-        )
-    );
-
-    // Initialise the subclass statics
-    SendMessageW(mainWnd.GetHwnd(), WM_USER + 99,
-        reinterpret_cast<WPARAM>(&app),
-        reinterpret_cast<LPARAM>(&recorder));
-
     // ── Message loop ─────────────────────────────────────────────────────────
     int ret = mainWnd.MessageLoop();
 
     // ── Cleanup ───────────────────────────────────────────────────────────────
     app.stopMonitor.store(true);
-    // Wait for the monitor thread to finish (it sleeps in 1 s increments and
-    // re-checks stopFlag, so it will exit within one poll interval at most)
     if (app.monThread.joinable()) app.monThread.join();
 
     recorder.StopAll();

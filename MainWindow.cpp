@@ -229,6 +229,18 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wp, LPARAM lp) {
         // Trigger a listview refresh by the main thread (model statuses updated externally)
         return 0;
 
+    case WM_APP + 11: {
+        // Posted by the monitor thread to update a single model's status column.
+        // wParam = heap-allocated std::string* username
+        // lParam = heap-allocated std::string* status text
+        auto* name   = reinterpret_cast<std::string*>(wp);
+        auto* status = reinterpret_cast<std::string*>(lp);
+        if (name && status) UpdateRecordingStatus(*name, *status);
+        delete name;
+        delete status;
+        return 0;
+    }
+
     case WM_DESTROY:
         PostQuitMessage(0);
         return 0;
