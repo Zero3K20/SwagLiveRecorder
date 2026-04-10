@@ -59,7 +59,7 @@
 #include <iomanip>
 
 // ─── Agora constants ──────────────────────────────────────────────────────────
-static const char* AGORA_APP_ID      = "19c9ed8fd65f4ea9b5de096362af989e";
+// AGORA_APP_ID is declared in SwagLiveAPI.h (already included above)
 static const char* AGORA_SUA_HOST    = "https://sua-ap-web-1.agora.io";
 static const char* AGORA_WEBRTC_HOST = "https://webrtc2-ap-web-1.agora.io";
 // Fallback gateway (sd-rtn.com mirrors agora.io)
