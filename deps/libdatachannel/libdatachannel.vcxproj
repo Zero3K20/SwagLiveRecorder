@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Win32">
+      <Configuration>Debug</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>16.0</VCProjectVersion>
+    <ProjectGuid>{C3D4E5F6-A7B8-9012-CDEF-123456789012}</ProjectGuid>
+    <Keyword>MakeFileProj</Keyword>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <ProjectName>libdatachannel</ProjectName>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+    <ConfigurationType>Makefile</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v142</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
+    <ConfigurationType>Makefile</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v142</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Makefile</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v142</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Makefile</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v142</PlatformToolset>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings" />
+  <ImportGroup Label="Shared" />
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+
+  <PropertyGroup Label="UserMacros" />
+
+  <!-- Debug|Win32 -->
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <NMakeBuildCommandLine>cmake -B "$(ProjectDir)build\Win32" "$(ProjectDir)." -G "Visual Studio 16 2019" -A Win32 -DUSE_MBEDTLS=ON -DUSE_NICE=OFF -DNO_TESTS=ON -DNO_EXAMPLES=ON -DBUILD_SHARED_LIBS=ON &amp;&amp; cmake --build "$(ProjectDir)build\Win32" --config Debug</NMakeBuildCommandLine>
+    <NMakeOutput>$(ProjectDir)build\Win32\Debug\datachannel.lib</NMakeOutput>
+    <NMakeCleanCommandLine>if exist "$(ProjectDir)build\Win32\Debug" rmdir /S /Q "$(ProjectDir)build\Win32\Debug"</NMakeCleanCommandLine>
+    <NMakeReBuildCommandLine>if exist "$(ProjectDir)build\Win32\Debug" rmdir /S /Q "$(ProjectDir)build\Win32\Debug" &amp;&amp; cmake -B "$(ProjectDir)build\Win32" "$(ProjectDir)." -G "Visual Studio 16 2019" -A Win32 -DUSE_MBEDTLS=ON -DUSE_NICE=OFF -DNO_TESTS=ON -DNO_EXAMPLES=ON -DBUILD_SHARED_LIBS=ON &amp;&amp; cmake --build "$(ProjectDir)build\Win32" --config Debug</NMakeReBuildCommandLine>
+    <NMakePreprocessorDefinitions>WIN32;_DEBUG;$(NMakePreprocessorDefinitions)</NMakePreprocessorDefinitions>
+    <NMakeIncludeSearchPath>$(ProjectDir)include;$(NMakeIncludeSearchPath)</NMakeIncludeSearchPath>
+  </PropertyGroup>
+
+  <!-- Release|Win32 -->
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <NMakeBuildCommandLine>cmake -B "$(ProjectDir)build\Win32" "$(ProjectDir)." -G "Visual Studio 16 2019" -A Win32 -DUSE_MBEDTLS=ON -DUSE_NICE=OFF -DNO_TESTS=ON -DNO_EXAMPLES=ON -DBUILD_SHARED_LIBS=ON &amp;&amp; cmake --build "$(ProjectDir)build\Win32" --config Release</NMakeBuildCommandLine>
+    <NMakeOutput>$(ProjectDir)build\Win32\Release\datachannel.lib</NMakeOutput>
+    <NMakeCleanCommandLine>if exist "$(ProjectDir)build\Win32\Release" rmdir /S /Q "$(ProjectDir)build\Win32\Release"</NMakeCleanCommandLine>
+    <NMakeReBuildCommandLine>if exist "$(ProjectDir)build\Win32\Release" rmdir /S /Q "$(ProjectDir)build\Win32\Release" &amp;&amp; cmake -B "$(ProjectDir)build\Win32" "$(ProjectDir)." -G "Visual Studio 16 2019" -A Win32 -DUSE_MBEDTLS=ON -DUSE_NICE=OFF -DNO_TESTS=ON -DNO_EXAMPLES=ON -DBUILD_SHARED_LIBS=ON &amp;&amp; cmake --build "$(ProjectDir)build\Win32" --config Release</NMakeReBuildCommandLine>
+    <NMakePreprocessorDefinitions>WIN32;NDEBUG;$(NMakePreprocessorDefinitions)</NMakePreprocessorDefinitions>
+    <NMakeIncludeSearchPath>$(ProjectDir)include;$(NMakeIncludeSearchPath)</NMakeIncludeSearchPath>
+  </PropertyGroup>
+
+  <!-- Debug|x64 -->
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <NMakeBuildCommandLine>cmake -B "$(ProjectDir)build\x64" "$(ProjectDir)." -G "Visual Studio 16 2019" -A x64 -DUSE_MBEDTLS=ON -DUSE_NICE=OFF -DNO_TESTS=ON -DNO_EXAMPLES=ON -DBUILD_SHARED_LIBS=ON &amp;&amp; cmake --build "$(ProjectDir)build\x64" --config Debug</NMakeBuildCommandLine>
+    <NMakeOutput>$(ProjectDir)build\x64\Debug\datachannel.lib</NMakeOutput>
+    <NMakeCleanCommandLine>if exist "$(ProjectDir)build\x64\Debug" rmdir /S /Q "$(ProjectDir)build\x64\Debug"</NMakeCleanCommandLine>
+    <NMakeReBuildCommandLine>if exist "$(ProjectDir)build\x64\Debug" rmdir /S /Q "$(ProjectDir)build\x64\Debug" &amp;&amp; cmake -B "$(ProjectDir)build\x64" "$(ProjectDir)." -G "Visual Studio 16 2019" -A x64 -DUSE_MBEDTLS=ON -DUSE_NICE=OFF -DNO_TESTS=ON -DNO_EXAMPLES=ON -DBUILD_SHARED_LIBS=ON &amp;&amp; cmake --build "$(ProjectDir)build\x64" --config Debug</NMakeReBuildCommandLine>
+    <NMakePreprocessorDefinitions>_DEBUG;$(NMakePreprocessorDefinitions)</NMakePreprocessorDefinitions>
+    <NMakeIncludeSearchPath>$(ProjectDir)include;$(NMakeIncludeSearchPath)</NMakeIncludeSearchPath>
+  </PropertyGroup>
+
+  <!-- Release|x64 -->
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <NMakeBuildCommandLine>cmake -B "$(ProjectDir)build\x64" "$(ProjectDir)." -G "Visual Studio 16 2019" -A x64 -DUSE_MBEDTLS=ON -DUSE_NICE=OFF -DNO_TESTS=ON -DNO_EXAMPLES=ON -DBUILD_SHARED_LIBS=ON &amp;&amp; cmake --build "$(ProjectDir)build\x64" --config Release</NMakeBuildCommandLine>
+    <NMakeOutput>$(ProjectDir)build\x64\Release\datachannel.lib</NMakeOutput>
+    <NMakeCleanCommandLine>if exist "$(ProjectDir)build\x64\Release" rmdir /S /Q "$(ProjectDir)build\x64\Release"</NMakeCleanCommandLine>
+    <NMakeReBuildCommandLine>if exist "$(ProjectDir)build\x64\Release" rmdir /S /Q "$(ProjectDir)build\x64\Release" &amp;&amp; cmake -B "$(ProjectDir)build\x64" "$(ProjectDir)." -G "Visual Studio 16 2019" -A x64 -DUSE_MBEDTLS=ON -DUSE_NICE=OFF -DNO_TESTS=ON -DNO_EXAMPLES=ON -DBUILD_SHARED_LIBS=ON &amp;&amp; cmake --build "$(ProjectDir)build\x64" --config Release</NMakeReBuildCommandLine>
+    <NMakePreprocessorDefinitions>NDEBUG;$(NMakePreprocessorDefinitions)</NMakePreprocessorDefinitions>
+    <NMakeIncludeSearchPath>$(ProjectDir)include;$(NMakeIncludeSearchPath)</NMakeIncludeSearchPath>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets" />
+</Project>

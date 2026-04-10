@@ -1,0 +1,49 @@
+# Visual Studio build artifacts
+.vs/
+*.user
+*.suo
+*.ncb
+*.aps
+*.pch
+*.sbr
+*.sdf
+*.opensdf
+*.tlog
+*.lastbuildstate
+*.VC.db
+*.VC.opendb
+ipch/
+
+# Build output directories
+Debug/
+Release/
+x64/
+Win32/
+
+# Compiled binaries
+*.exe
+*.dll
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.obj
+
+# Runtime generated files
+recordings/
+models.txt
+*.ts
+*.mp4
+*.webm
+*.log
+
+# WebView2 user data (created at runtime, one folder per model)
+webview2_data/
+
+# NuGet packages (restored on build)
+packages/
+
+# Windows-specific
+Thumbs.db
+Desktop.ini
+ehthumbs.db
