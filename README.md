@@ -57,7 +57,7 @@ ffmpeg -i recording.webm -c copy output.mp4
 - **Multiple simultaneous recordings** — each model gets its own independent PeerConnection / recording thread
 - **Persistent watchlist** — stored in `models.txt` next to the executable; survives restarts
 - **Auth token support** — paste your swag.live Bearer token so the API returns complete stream status data
-- **No vcpkg / NuGet** — libdatachannel is a git submodule; build it once with `build_deps.cmd`
+- **No vcpkg / NuGet** — libdatachannel and all its dependencies are included as plain source in `deps/libdatachannel/`; build once with `build_deps.cmd`
 
 ---
 
@@ -86,15 +86,14 @@ ffmpeg -i recording.webm -c copy output.mp4
 From a **Developer Command Prompt for VS 2019** (so that `cmake` and `cl` are on the PATH):
 
 ```bat
-git clone --recurse-submodules https://github.com/Zero3K20/SwagLiveRecorder.git
+git clone https://github.com/Zero3K20/SwagLiveRecorder.git
 cd SwagLiveRecorder
 build_deps.cmd
 ```
 
 `build_deps.cmd` will:
-1. Run `git submodule update --init --recursive --depth 1` to populate `deps/libdatachannel`.
-2. Configure the library with CMake (uses Mbed TLS — no OpenSSL installation needed).
-3. Build both **Release** and **Debug** configurations.
+1. Configure libdatachannel with CMake (uses Mbed TLS — no OpenSSL installation needed).
+2. Build both **Release** and **Debug** configurations.
 
 The resulting `datachannel.lib` / `datachannel.dll` land in `deps\libdatachannel\build\Release\` and `Debug\`.
 
@@ -148,7 +147,7 @@ SwagLiveRecorder/
 │   ├── tlsclient.h/.cpp
 │   └── lock.h
 ├── deps/
-│   └── libdatachannel/            # Git submodule (paullouisageneau/libdatachannel)
+│   └── libdatachannel/            # libdatachannel source (paullouisageneau/libdatachannel @ 9ddf889)
 ├── build_deps.cmd                 # One-shot CMake build of libdatachannel
 ├── SwagLiveRecorder.vcxproj       # VS2019 project
 └── SwagLiveRecorder.sln
@@ -160,7 +159,7 @@ SwagLiveRecorder/
 
 The TLS client used to query the swag.live API is based on the implementation in the [Tardsplaya project](https://github.com/Zero3K/Tardsplaya/tree/main/tlsclient).  It uses Windows' built-in **WinHTTP** stack — no OpenSSL or other third-party TLS library is required for the API layer.
 
-libdatachannel uses **Mbed TLS** (compiled as a submodule) for its own DTLS/TLS stack.
+libdatachannel uses **Mbed TLS** (included in `deps/libdatachannel/deps/`) for its own DTLS/TLS stack.
 
 ---
 

@@ -1,22 +1,19 @@
 @echo off
 setlocal
 
-:: build_deps.cmd  –  build libdatachannel (submodule) for all configurations.
+:: build_deps.cmd  –  build libdatachannel for all configurations.
 ::
 :: Run this once from the repository root before opening the Visual Studio
 :: solution.  Requires CMake 3.13+ and Visual Studio 2019 (or later) to be
 :: on the PATH.
 ::
+:: libdatachannel (and its dependencies plog, libjuice, libsrtp, usrsctp,
+:: nlohmann/json) are included directly in deps\libdatachannel\ — no
+:: internet access or git submodule step is needed.
+::
 :: The output files placed in deps\libdatachannel\build\Release\ and
 :: deps\libdatachannel\build\Debug\ are then picked up automatically by the
 :: Visual Studio project.
-
-echo [build_deps] Initialising git submodules...
-git submodule update --init --recursive --depth 1
-if errorlevel 1 (
-    echo ERROR: git submodule update failed.
-    exit /b 1
-)
 
 set DEPS_DIR=%~dp0deps\libdatachannel
 set BUILD_DIR=%DEPS_DIR%\build
