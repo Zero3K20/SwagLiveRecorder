@@ -5,12 +5,12 @@
 //   - Win32 GUI (MainWindow) for the watchlist, recording status, and settings
 //   - Background monitor thread polls the swag.live API (SwagLiveAPI + TLSClient)
 //   - LibDataChannelRecorder performs WebRTC signaling + media receipt using the
-//     libdatachannel library (submodule at deps/libdatachannel) and writes
+//     libdatachannel library (at deps/libdatachannel) and writes
 //     directly to .webm files via the hand-rolled WebMMuxer.
 //
 // Build requirements:
 //   - Visual Studio 2019 (toolset v142), Windows SDK 10.0
-//   - libdatachannel submodule: run build_deps.cmd once before building
+//   - libdatachannel: run build_deps.cmd once before building
 //=============================================================================
 
 #ifndef UNICODE

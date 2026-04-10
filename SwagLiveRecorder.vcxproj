@@ -80,7 +80,7 @@
   <!-- Debug|Win32 -->
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
-      <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;UNICODE;_UNICODE;RTC_ENABLE_MEDIA=1;RTC_ENABLE_WEBSOCKET=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;UNICODE;_UNICODE;WIN32_LEAN_AND_MEAN;RTC_ENABLE_MEDIA=1;RTC_ENABLE_WEBSOCKET=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>$(ProjectDir)deps\libdatachannel\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
       <WarningLevel>Level3</WarningLevel>
@@ -106,7 +106,7 @@
   <!-- Release|Win32 -->
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
-      <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;UNICODE;_UNICODE;RTC_ENABLE_MEDIA=1;RTC_ENABLE_WEBSOCKET=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;UNICODE;_UNICODE;WIN32_LEAN_AND_MEAN;RTC_ENABLE_MEDIA=1;RTC_ENABLE_WEBSOCKET=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>$(ProjectDir)deps\libdatachannel\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <WarningLevel>Level3</WarningLevel>
@@ -136,7 +136,7 @@
   <!-- Debug|x64 -->
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
-      <PreprocessorDefinitions>_DEBUG;_WINDOWS;UNICODE;_UNICODE;RTC_ENABLE_MEDIA=1;RTC_ENABLE_WEBSOCKET=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_DEBUG;_WINDOWS;UNICODE;_UNICODE;WIN32_LEAN_AND_MEAN;RTC_ENABLE_MEDIA=1;RTC_ENABLE_WEBSOCKET=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>$(ProjectDir)deps\libdatachannel\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
       <WarningLevel>Level3</WarningLevel>
@@ -161,7 +161,7 @@
   <!-- Release|x64 -->
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
-      <PreprocessorDefinitions>NDEBUG;_WINDOWS;UNICODE;_UNICODE;RTC_ENABLE_MEDIA=1;RTC_ENABLE_WEBSOCKET=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NDEBUG;_WINDOWS;UNICODE;_UNICODE;WIN32_LEAN_AND_MEAN;RTC_ENABLE_MEDIA=1;RTC_ENABLE_WEBSOCKET=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>$(ProjectDir)deps\libdatachannel\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <WarningLevel>Level3</WarningLevel>

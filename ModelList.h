@@ -32,7 +32,7 @@ public:
 
     // Save watchlist to file
     bool Save() const;
-    bool Save(const std::string& filePath);
+    bool Save(const std::string& filePath) const;
 
     // Add a model to the watchlist (returns false if already present)
     bool AddModel(const std::string& username, bool enabled = true);

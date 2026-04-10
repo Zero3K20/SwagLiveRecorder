@@ -73,7 +73,7 @@ bool ModelList::Save() const {
     return Save(m_filePath);
 }
 
-bool ModelList::Save(const std::string& filePath) {
+bool ModelList::Save(const std::string& filePath) const {
     std::ofstream file(filePath);
     if (!file.is_open()) {
         std::cerr << "Error: Could not save model list to " << filePath << std::endl;
