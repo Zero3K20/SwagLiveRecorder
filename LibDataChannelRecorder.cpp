@@ -350,8 +350,9 @@ void LibDataChannelRecorder::RecordingThread() {
         if (e.port == 443) {
             // TCP/TLS relay – add as TURN server so libdatachannel can reach it
             rtcConfig.iceServers.push_back(
-                rtc::IceServer("turn:" + e.ip + ":443?transport=tcp",
-                               "agora", m_streamInfo.agoraToken));
+                rtc::IceServer(e.ip, uint16_t(443),
+                               std::string("agora"), m_streamInfo.agoraToken,
+                               rtc::IceServer::RelayType::TurnTcp));
         }
     }
     // Also include Google STUN to gather our own candidates.
